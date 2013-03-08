@@ -40,7 +40,8 @@ WriteMakefile1(
     MIN_PERL_VERSION => '5.008',
     META_MERGE => {
         resources => {
-            repository => 'git://github.com/Sereal/Sereal.git'
+            repository => 'git://github.com/Sereal/Sereal.git',
+            bugtracker => 'https://github.com/Sereal/Sereal/issues',
         },
     },
     BUILD_REQUIRES => {
@@ -61,7 +62,7 @@ WriteMakefile1(
     }, # e.g., Module::Name => 1.1
     LICENSE => 'perl',
     ABSTRACT_FROM => 'lib/Sereal/Decoder.pm',
-    AUTHOR => 'Steffen Mueller <smueller@cpan.org>', # FIXME
+    AUTHOR => 'Steffen Mueller <smueller@cpan.org>, Yves Orton <yves@cpan.org>',
     LIBS              => [''], # e.g., '-lm'
     DEFINE            => $defines,
     INC               => '-I.', # e.g., '-I. -I/usr/include/other'
@@ -89,6 +90,6 @@ sub WriteMakefile1 {  #Written by Alexandr Ciornii, version 0.20. Added by eumm-
     delete $params{AUTHOR} if $] < 5.005;
     delete $params{ABSTRACT_FROM} if $] < 5.005;
     delete $params{BINARY_LOCATION} if $] < 5.005;
-
+    delete $params{OPTIMIZE} if $^O eq 'MSWin32';
     WriteMakefile(%params);
 }

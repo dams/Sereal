@@ -41,12 +41,11 @@ extern "C" {
 #define HAS_SV2OBJ
 #endif
 
+#include "srl_protocol.h"
 #include "srl_encoder.h"
-
 #include "srl_common.h"
 #include "ptable.h"
 #include "srl_buffer.h"
-#include "srl_protocol.h"
 
 #include "snappy/csnappy_compress.c"
 
@@ -80,16 +79,16 @@ extern "C" {
 /* some static function declarations */
 static void srl_dump_sv(pTHX_ srl_encoder_t *enc, SV *src);
 static void srl_dump_pv(pTHX_ srl_encoder_t *enc, const char* src, STRLEN src_len, int is_utf8);
-static SRL_INLINE void srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc);
-static SRL_INLINE void srl_dump_av(pTHX_ srl_encoder_t *enc, AV *src, U32 refcnt);
-static SRL_INLINE void srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcnt);
-static SRL_INLINE void srl_dump_hk(pTHX_ srl_encoder_t *enc, HE *src, const int share_keys);
-static SRL_INLINE void srl_dump_nv(pTHX_ srl_encoder_t *enc, SV *src);
-static SRL_INLINE void srl_dump_ivuv(pTHX_ srl_encoder_t *enc, SV *src);
-static SRL_INLINE void srl_dump_classname(pTHX_ srl_encoder_t *enc, SV *src);
-static SRL_INLINE PTABLE_t *srl_init_string_hash(srl_encoder_t *enc);
-static SRL_INLINE PTABLE_t *srl_init_ref_hash(srl_encoder_t *enc);
-static SRL_INLINE PTABLE_t *srl_init_weak_hash(srl_encoder_t *enc);
+SRL_STATIC_INLINE void srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc);
+SRL_STATIC_INLINE void srl_dump_av(pTHX_ srl_encoder_t *enc, AV *src, U32 refcnt);
+SRL_STATIC_INLINE void srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcnt);
+SRL_STATIC_INLINE void srl_dump_hk(pTHX_ srl_encoder_t *enc, HE *src, const int share_keys);
+SRL_STATIC_INLINE void srl_dump_nv(pTHX_ srl_encoder_t *enc, SV *src);
+SRL_STATIC_INLINE void srl_dump_ivuv(pTHX_ srl_encoder_t *enc, SV *src);
+SRL_STATIC_INLINE void srl_dump_classname(pTHX_ srl_encoder_t *enc, SV *src);
+SRL_STATIC_INLINE PTABLE_t *srl_init_string_hash(srl_encoder_t *enc);
+SRL_STATIC_INLINE PTABLE_t *srl_init_ref_hash(srl_encoder_t *enc);
+SRL_STATIC_INLINE PTABLE_t *srl_init_weak_hash(srl_encoder_t *enc);
 
 #define SRL_GET_STR_SEENHASH(enc) ( (enc)->str_seenhash == NULL     \
                                     ? srl_init_string_hash(enc)     \
@@ -191,7 +190,7 @@ srl_destroy_encoder(pTHX_ srl_encoder_t *enc)
 }
 
 /* allocate an empty encoder struct - flags still to be set up */
-static SRL_INLINE srl_encoder_t *
+SRL_STATIC_INLINE srl_encoder_t *
 srl_empty_encoder_struct(pTHX)
 {
     srl_encoder_t *enc;
@@ -258,7 +257,6 @@ srl_build_encoder_struct(pTHX_ HV *opt)
 
         svp = hv_fetchs(opt, "sort_keys", 0);
         if ( svp && SvTRUE(*svp) ) {
-            undef_unknown = 1;
             enc->flags |= SRL_F_SORT_KEYS;
         }
 
@@ -308,21 +306,21 @@ srl_build_encoder_struct_alike(pTHX_ srl_encoder_t *proto)
     return enc;
 }
 
-static SRL_INLINE PTABLE_t *
+SRL_STATIC_INLINE PTABLE_t *
 srl_init_string_hash(srl_encoder_t *enc)
 {
     enc->str_seenhash = PTABLE_new_size(4);
     return enc->str_seenhash;
 }
 
-static SRL_INLINE PTABLE_t *
+SRL_STATIC_INLINE PTABLE_t *
 srl_init_ref_hash(srl_encoder_t *enc)
 {
     enc->ref_seenhash = PTABLE_new_size(4);
     return enc->ref_seenhash;
 }
 
-static SRL_INLINE PTABLE_t *
+SRL_STATIC_INLINE PTABLE_t *
 srl_init_weak_hash(srl_encoder_t *enc)
 {
     enc->weak_seenhash = PTABLE_new_size(3);
@@ -352,14 +350,41 @@ srl_write_header(pTHX_ srl_encoder_t *enc)
     srl_buf_cat_char_nocheck(enc, '\0'); /* variable header length (0 right now) */
 }
 
+/* The following is to handle the fact that under normal build options
+ * VC6 will compare all floating point at 80 bits of precision, regardless
+ * regardless of the type.
+ * By setting the vars to "volatile" we avoid this behavior.
+ * Hopefully this fixes various remaining Win32 test failures we see.
+ *
+ * Note this patch could not have been written without Bulk88's help.
+ * Thanks a lot man!
+ *
+ * Comment from Bulk88:
+ * -O1 and -O2 tested and both of those 2 "failed"
+ * -Op - Improve Float Consistency does not have the bug
+ * Problem not seen in VC 2003
+ * I (Bulk88) don't have a VC 2002 to test v13 officially
+ *
+ */
+#if defined(_MSC_VER)
+#   if _MSC_VER < 1300
+#       define MS_VC6_WORKAROUND_VOLATILE volatile
+#   else
+#       define MS_VC6_WORKAROUND_VOLATILE
+#   endif
+#else
+#   define MS_VC6_WORKAROUND_VOLATILE
+#endif
+
 
 /* Code for serializing floats */
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_nv(pTHX_ srl_encoder_t *enc, SV *src)
 {
     NV nv= SvNV(src);
-    float f= nv;
-    double d= nv;
+    MS_VC6_WORKAROUND_VOLATILE float f= (float)nv;
+    MS_VC6_WORKAROUND_VOLATILE double d= (double)nv;
+    /* TODO: this logic could be reworked to not duplicate so much code, which will help on win32 */
     if ( f == nv || nv != nv ) {
         BUF_SIZE_ASSERT(enc, 1 + sizeof(f)); /* heuristic: header + string + simple value */
         srl_buf_cat_char_nocheck(enc,SRL_HDR_FLOAT);
@@ -380,7 +405,7 @@ srl_dump_nv(pTHX_ srl_encoder_t *enc, SV *src)
 
 
 /* Code for serializing any SINGLE integer type */
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_ivuv(pTHX_ srl_encoder_t *enc, SV *src)
 {
     char hdr;
@@ -417,7 +442,7 @@ srl_dump_ivuv(pTHX_ srl_encoder_t *enc, SV *src)
 
 /* Outputs a bless header and the class name (as some form of string or COPY).
  * Caller then has to output the actual reference payload. */
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_classname(pTHX_ srl_encoder_t *enc, SV *src)
 {
     const HV *stash = SvSTASH(src);
@@ -603,7 +628,7 @@ srl_dump_data_structure(pTHX_ srl_encoder_t *enc, SV *src)
     if (DEBUGHACK) warn("== end dump");
 }
 
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
 {
     PTABLE_t *weak_seenhash = SRL_GET_WEAK_SEENHASH(enc);
@@ -628,31 +653,39 @@ srl_fixup_weakrefs(pTHX_ srl_encoder_t *enc)
 }
 
 #ifndef MAX_CHARSET_NAME_LENGTH
-#define MAX_CHARSET_NAME_LENGTH 2
+#    define MAX_CHARSET_NAME_LENGTH 2
 #endif
 
 #if PERL_VERSION == 10
 /*
 	Apparently regexes in 5.10 are "modern" but with 5.8 internals
 */
-#define RXf_PMf_STD_PMMOD_SHIFT 12
-#define RX_EXTFLAGS(re)	((re)->extflags)
-#define RX_PRECOMP(re) ((re)->precomp)
-#define RX_PRELEN(re) ((re)->prelen)
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_EXTFLAGS(re)	((re)->extflags)
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
 
 // Maybe this is only on OS X, where SvUTF8(sv) exists but looks at flags that don't exist
-#define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
+#    define RX_UTF8(re) (RX_EXTFLAGS(re) & RXf_UTF8)
 
 #elif defined(SvRX)
-#define MODERN_REGEXP
+#    define MODERN_REGEXP
+     /* With commit 8d919b0a35f2b57a6bed2f8355b25b19ac5ad0c5 (perl.git) and
+      * release 5.17.6, regular expression are no longer SvPOK (IOW are no longer
+      * considered to be containing a string).
+      * This breaks some of the REGEXP detection logic in srl_dump_sv, so
+      * we need yet another CPP define. */
+#    if PERL_VERSION > 17 || (PERL_VERSION == 17 && PERL_SUBVERSION >= 6)
+#        define REGEXP_NO_LONGER_POK
+#    endif
 #else
-#define INT_PAT_MODS "msix"
-#define RXf_PMf_STD_PMMOD_SHIFT 12
-#define RX_PRECOMP(re) ((re)->precomp)
-#define RX_PRELEN(re) ((re)->prelen)
-#define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
-#define RX_EXTFLAGS(re) ((re)->reganch)
-#define RXf_PMf_COMPILETIME  PMf_COMPILETIME
+#    define INT_PAT_MODS "msix"
+#    define RXf_PMf_STD_PMMOD_SHIFT 12
+#    define RX_PRECOMP(re) ((re)->precomp)
+#    define RX_PRELEN(re) ((re)->prelen)
+#    define RX_UTF8(re) ((re)->reganch & ROPT_UTF8)
+#    define RX_EXTFLAGS(re) ((re)->reganch)
+#    define RXf_PMf_COMPILETIME  PMf_COMPILETIME
 #endif
 
 
@@ -703,7 +736,7 @@ srl_dump_regexp(pTHX_ srl_encoder_t *enc, SV *sv)
     return;
 }
 
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_av(pTHX_ srl_encoder_t *enc, AV *src, U32 refcount)
 {
     UV n;
@@ -771,7 +804,7 @@ he_cmp_slow(const void *a, const void *b)
     return sv_cmp( HeSVKEY_force( *(HE **)b), HeSVKEY_force( *(HE **)a ) );
 }
 
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
 {
     HE *he;
@@ -882,7 +915,7 @@ srl_dump_hv(pTHX_ srl_encoder_t *enc, HV *src, U32 refcount)
 }
 
 
-static SRL_INLINE void
+SRL_STATIC_INLINE void
 srl_dump_hk(pTHX_ srl_encoder_t *enc, HE *src, const int share_keys)
 {
     char *str;
@@ -974,7 +1007,7 @@ srl_dump_sv(pTHX_ srl_encoder_t *enc, SV *src)
     AV *backrefs;
     SV* refsv= NULL;
     UV weakref_ofs= 0;              /* preserved between loops */
-    ssize_t ref_rewrite_pos= 0;      /* preserved between loops */
+    SSize_t ref_rewrite_pos= 0;      /* preserved between loops - note SSize_t is a perl define */
     assert(src);
 
     if (++enc->recursion_depth == enc->max_recursion_depth) {
@@ -990,11 +1023,15 @@ redo_dump:
     DEBUG_ASSERT_BUF_SANE(enc);
     if ( SvMAGICAL(src) ) {
         SvGETMAGIC(src);
+#ifdef Perl_hv_backreferences_p
         if (svt != SVt_PVHV)
+#endif
             mg = mg_find(src, PERL_MAGIC_backref);
     }
+#ifdef Perl_hv_backreferences_p
     if (svt == SVt_PVHV)
         backrefs= *Perl_hv_backreferences_p(aTHX_ (HV *)src);
+#endif
     if ( mg || backrefs ) {
         PTABLE_t *weak_seenhash= SRL_GET_WEAK_SEENHASH(enc);
         PTABLE_ENTRY_t *pe= PTABLE_find(weak_seenhash, src);
@@ -1053,11 +1090,13 @@ redo_dump:
         assert(weakref_ofs == 0);
     }
     if (SvPOKp(src)) {
-#ifdef MODERN_REGEXP
+#if defined(MODERN_REGEXP) && !defined(REGEXP_NO_LONGER_POK)
+        /* Only need to enter here if we have rather modern regexps, but they're
+         * still POK (pre 5.17.6). */
         if (expect_false( svt == SVt_REGEXP ) ) {
             srl_dump_regexp(aTHX_ enc, src);
         }
-        else        
+        else
 #endif
         {
             STRLEN len;
@@ -1066,6 +1105,14 @@ redo_dump:
         }
     }
     else
+#if defined(MODERN_REGEXP) && defined(REGEXP_NO_LONGER_POK)
+    /* Only need to enter here if we have rather modern regexps AND they're
+     * NO LONGER POK (5.17.6 and up). */
+    if (expect_false( svt == SVt_REGEXP ) ) {
+        srl_dump_regexp(aTHX_ enc, src);
+    }
+    else
+#endif
     if (SvNOKp(src)) {
         /* dump floats */
         srl_dump_nv(aTHX_ enc, src);
@@ -1079,10 +1126,13 @@ redo_dump:
     if (SvROK(src)) {
         /* dump references */
         SV *referent= SvRV(src);
+/* assert()-like hack to be compiled out by default */
+#ifndef NDEBUG
         if (!referent) {
             sv_dump(src);
             assert(referent);
         }
+#endif
         if (SvWEAKREF(src)) {
             weakref_ofs= BUF_POS_OFS(enc);
             srl_buf_cat_char(enc, SRL_HDR_WEAKEN);
@@ -1111,7 +1161,7 @@ redo_dump:
         ((SvFLAGS(src) & (SVs_OBJECT|SVf_OK|SVs_GMG|SVs_SMG|SVs_RMG)) == (SVs_OBJECT|BFD_Svs_SMG_OR_RMG)) &&
         (mg = mg_find(src, PERL_MAGIC_qr))
     ) {
-            /* Houston, we have a regex! */
+        /* Houston, we have a regex! */
         srl_dump_regexp(aTHX_ enc, (SV*)mg); /* yes the SV* cast makes me feel dirty too */
     }
     else
